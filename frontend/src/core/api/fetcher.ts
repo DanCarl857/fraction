@@ -39,17 +39,15 @@ function shouldRetry(error: unknown) {
     // Network / CORS / timeout (no response) => retryable
     if (!status) return true;
 
-    // Retry only server errors
-    if (status >= 500 && status < 600) return true;
+    // Don't retry any 4xx or 5xx errors
+    if (status >= 400 && status < 600) return false;
 
-    // All other 4xx => don't retry
     return false;
   }
 
   // Non-axios error: assume not retryable (or set true if you prefer)
   return false;
 }
-
 
 export function createFetcher({
   apiToken,

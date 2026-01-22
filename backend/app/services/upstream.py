@@ -2,6 +2,7 @@
 import httpx
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import func, or_
 from app.core.config import settings
 from app.models.player import Player
 
@@ -56,6 +57,8 @@ def _extract_stats(p: dict):
 
     return to_int(hits), to_int(hr)
 
+from sqlalchemy.dialects.postgresql import insert
+
 def sync_players(db: Session) -> dict:
     r = httpx.get(settings.BASEBALL_UPSTREAM_URL, timeout=30.0)
     r.raise_for_status()
@@ -65,7 +68,7 @@ def sync_players(db: Session) -> dict:
     if not isinstance(players, list):
         raise ValueError("Unexpected upstream shape: expected list of players")
 
-    rows = []
+    rows: list[dict] = []
     for p in players:
         if not isinstance(p, dict):
             continue
@@ -84,27 +87,26 @@ def sync_players(db: Session) -> dict:
             }
         )
 
-    deduped = {}
+    # de-dupe inside the batch by external_id (prevents ON CONFLICT errors)
+    deduped: dict[str, dict] = {}
     for row in rows:
         deduped[row["external_id"]] = row
     rows = list(deduped.values())
 
     stmt = insert(Player).values(rows)
+
     stmt = stmt.on_conflict_do_update(
         index_elements=[Player.external_id],
-        set_={
-            "name": stmt.excluded.name,
-            "team": stmt.excluded.team,
-            "position": stmt.excluded.position,
-            "hits": stmt.excluded.hits,
-            "home_runs": stmt.excluded.home_runs,
-            "raw": stmt.excluded.raw,
-        },
+        set_={"raw": stmt.excluded.raw},
     )
 
-    db.execute(stmt)
+    result = db.execute(stmt)
     db.commit()
 
-    return {"received": len(players), "upserted": len(rows), "deduped_out": len(players) - len(rows)}
-
+    return {
+        "received": len(players),
+        "unique": len(rows),
+        "affected": result.rowcount,
+        "deduped_out": len(players) - len(rows),
+    }
 

@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { apiFetch } from "@/core/api/apiClient";
 import { requestBody, responseBody } from "@/core/api/fetcher";
-import { PlayerDescriptionSchema, PlayersListSchema, UpdatePlayerRequestSchema, type UpdatePlayerRequest } from "./schema";
+import { PlayerDescriptionSchema, PlayersListSchema, SyncResponseSchema, UpdatePlayerRequestSchema, type UpdatePlayerRequest } from "./schema";
 
 export type PlayersSort = "hits" | "hr";
 
@@ -62,6 +62,23 @@ export function useUpdatePlayer() {
       await qc.invalidateQueries({
         queryKey: ["get-player-description", variables.playerId],
       });
+    },
+  });
+}
+
+export function useSyncPlayers() {
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () =>
+      apiFetch({
+        endpoint: "/api/sync",
+        method: "POST", // change to "GET" if your backend sync is GET
+        response: responseBody(SyncResponseSchema),
+      }),
+    onSuccess: async () => {
+      // refresh all player lists (hits/hr)
+      await qc.invalidateQueries({ queryKey: ["get-players"] });
     },
   });
 }

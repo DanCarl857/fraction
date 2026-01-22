@@ -33,6 +33,12 @@ export const UpdatePlayerRequestSchema = z.object({
   home_runs: z.number().int().nullable().optional(),
 });
 
+export const SyncResponseSchema = z.object({
+  received: z.number().optional(),
+  upserted: z.number().optional(),
+  deduped_out: z.number().optional(),
+});
+
 export type Player = z.infer<typeof PlayerSchema>;
 export type PlayerDescription = z.infer<typeof PlayerDescriptionSchema>;
 export type UpdatePlayerRequest = z.infer<typeof UpdatePlayerRequestSchema>;
