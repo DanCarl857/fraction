@@ -1,10 +1,19 @@
-// src/api/players/hooks.ts
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// src/api/players/hooks.ts  (DROP-IN REPLACEMENT for useGetPlayerDescription)
+// ✅ when description is generated, patch caches so subsequent clicks are instant
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { z } from "zod";
 
 import { apiFetch } from "@/core/api/apiClient";
 import { requestBody, responseBody } from "@/core/api/fetcher";
-import { PlayerDescriptionSchema, PlayersListSchema, SyncResponseSchema, UpdatePlayerRequestSchema, type UpdatePlayerRequest } from "./schema";
+import {
+  PlayerDescriptionSchema,
+  PlayerSchema,
+  PlayersListSchema,
+  SyncResponseSchema,
+  UpdatePlayerRequestSchema,
+  type UpdatePlayerRequest,
+  // type Player,
+} from "./schema";
 
 export type PlayersSort = "hits" | "hr";
 
@@ -20,16 +29,40 @@ export function useGetPlayers(sort: PlayersSort) {
   });
 }
 
-export function useGetPlayerDescription(playerId: number | null) {
+export function useGetPlayer(playerId: number | null) {
   return useQuery({
-    queryKey: ["get-player-description", playerId],
+    queryKey: ["get-player", playerId],
     enabled: playerId != null,
     queryFn: async () =>
       apiFetch({
+        endpoint: `/api/players/${String(playerId)}`,
+        method: "GET",
+        response: responseBody(PlayerSchema),
+      }),
+  });
+}
+
+export function useGetPlayerDescription(
+  playerId: number | null,
+  opts?: { enabled?: boolean },
+) {
+  const qc = useQueryClient();
+
+  const enabled = (opts?.enabled ?? true) && playerId != null;
+
+  return useQuery({
+    queryKey: ["get-player-description", playerId],
+    enabled,
+    queryFn: async () => {
+      const desc = await apiFetch({
         endpoint: `/api/players/${String(playerId)}/description`,
         method: "GET",
         response: responseBody(PlayerDescriptionSchema),
-      }),
+      });
+      qc.setQueryData(["get-player-description", playerId], desc);
+
+      return desc;
+    },
   });
 }
 
@@ -44,24 +77,21 @@ export function useUpdatePlayer() {
       playerId: number;
       payload: UpdatePlayerRequest;
     }) => {
-      // validate payload on the client
       const parsed = UpdatePlayerRequestSchema.parse(payload);
 
       return apiFetch({
         endpoint: `/api/players/${String(playerId)}`,
         method: "PUT",
-        config: {
-          data: requestBody(parsed),
-        },
-        response: responseBody(z.unknown()),
+        config: { data: requestBody(parsed) },
+        response: responseBody(PlayerSchema),
       });
     },
-    onSuccess: async (_data, variables) => {
-      // refresh list + description cache
+
+    onSuccess: async (updatedPlayer) => {
+      // ✅ Refetch EVERYTHING so you never end up with duplicates from cache patching
       await qc.invalidateQueries({ queryKey: ["get-players"] });
-      await qc.invalidateQueries({
-        queryKey: ["get-player-description", variables.playerId],
-      });
+      await qc.invalidateQueries({ queryKey: ["get-player", updatedPlayer.id] });
+      // await qc.invalidateQueries({ queryKey: ["get-player-description", updatedPlayer.id] });
     },
   });
 }
@@ -73,11 +103,10 @@ export function useSyncPlayers() {
     mutationFn: async () =>
       apiFetch({
         endpoint: "/api/sync",
-        method: "POST", // change to "GET" if your backend sync is GET
+        method: "POST",
         response: responseBody(SyncResponseSchema),
       }),
     onSuccess: async () => {
-      // refresh all player lists (hits/hr)
       await qc.invalidateQueries({ queryKey: ["get-players"] });
     },
   });

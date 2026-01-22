@@ -121,14 +121,33 @@ export function createFetcher({
   };
 }
 
+/**
+ * requestBody (DROP-IN)
+ * - snake_case everything for backend compatibility
+ * - BUT preserve "raw" exactly as-is (do NOT snake_case its keys)
+ *   so keys like "home run" don't become "home_run".
+ */
 export function requestBody(body: Record<string, unknown> | unknown[]) {
+  const preserveRaw = (obj: any) => {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return obj;
+
+    const hasRaw = Object.prototype.hasOwnProperty.call(obj, "raw");
+    const raw = hasRaw ? (obj as any).raw : undefined;
+
+    const rest: Record<string, unknown> = { ...(obj as Record<string, unknown>) };
+    if (hasRaw) delete (rest as any).raw;
+
+    // snake_case everything EXCEPT raw
+    const processed = snakecaseKeys(rest, { deep: true }) as Record<string, unknown>;
+    if (hasRaw) (processed as any).raw = raw;
+
+    return processed;
+  };
+
   const processedBody = Array.isArray(body)
-    ? body.map((item) =>
-        typeof item === "object" && item !== null
-          ? snakecaseKeys(item as Record<string, unknown>, { deep: true })
-          : item,
-      )
-    : snakecaseKeys(body, { deep: true });
+    ? body.map(preserveRaw)
+    : preserveRaw(body);
+
   return JSON.stringify(processedBody);
 }
 

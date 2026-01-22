@@ -1,10 +1,83 @@
-// src/components/players/EditPlayerDialog.tsx
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// src/components/players/EditPlayerDialog.tsx  (DROP-IN REPLACEMENT)
 "use client";
 
 import * as React from "react";
-import { useUpdatePlayer } from "@/api/hooks";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/ui/components/dialogs";
 import type { Player, UpdatePlayerRequest } from "@/api/schema";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/ui/components/dialogs";
+import { useUpdatePlayer } from "@/api/hooks";
+import { normalizeRaw } from "@/App";
+
+const RAW_KEY_ALIASES: Record<string, string> = {
+  home_run: "home run",
+  homeRun: "home run",
+  homerun: "home run",
+  HomeRun: "home run",
+
+  hits: "Hits",
+  Hits: "Hits",
+
+  at_bat: "At-bat",
+  atBat: "At-bat",
+  atbat: "At-bat",
+};
+
+function canonicalRawKey(k: string) {
+  return RAW_KEY_ALIASES[k] ?? k;
+}
+
+function buildCanonicalRaw(raw: Record<string, any>) {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(raw ?? {})) {
+    out[canonicalRawKey(k)] = v;
+  }
+  return out;
+}
+
+function formatCell(v: any) {
+  if (v == null) return "";
+  if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return String(v);
+  return JSON.stringify(v);
+}
+
+function parseCell(original: any, input: string) {
+  const s = input.trim();
+  if (s === "") return null;
+
+  if (s.toLowerCase() === "true") return true;
+  if (s.toLowerCase() === "false") return false;
+
+  const n = Number(s);
+  if (Number.isFinite(n) && /^[+-]?\d+(\.\d+)?$/.test(s)) return n;
+
+  if (typeof original === "object" && original !== null) {
+    try {
+      return JSON.parse(s);
+    } catch {
+      // fall through
+    }
+  }
+
+  return input;
+}
+
+function getRawKeys(raw: Record<string, any>) {
+  const keys = Object.keys(raw ?? {});
+  const preferred = ["Player name", "position", "Hits", "home run", "Games", "At-bat"];
+  keys.sort((a, b) => {
+    const ai = preferred.indexOf(a);
+    const bi = preferred.indexOf(b);
+    if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+    return a.localeCompare(b);
+  });
+  return keys;
+}
 
 export function EditPlayerDialog({
   open,
@@ -17,39 +90,47 @@ export function EditPlayerDialog({
 }) {
   const update = useUpdatePlayer();
 
-  const [form, setForm] = React.useState<UpdatePlayerRequest>({
-    name: "",
-    team: "",
-    position: "",
-    hits: null,
-    home_runs: null,
-  });
+  const [raw, setRaw] = React.useState<Record<string, any>>({});
+  const [draft, setDraft] = React.useState<Record<string, string>>({});
 
   React.useEffect(() => {
+    if (!open) return;
     if (!player) return;
-    setForm({
-      name: player.name ?? "",
-      team: player.team ?? "",
-      position: player.position ?? "",
-      hits: player.hits ?? null,
-      home_runs: player.home_runs ?? null,
+
+    // ✅ normalize + canonicalize keys ON LOAD so we only ever edit upstream keys
+    const nextRaw = buildCanonicalRaw(normalizeRaw(player.raw));
+    const keys = getRawKeys(nextRaw);
+
+    const nextDraft: Record<string, string> = {};
+    for (const k of keys) nextDraft[k] = formatCell(nextRaw[k]);
+
+    setRaw(nextRaw);
+    setDraft(nextDraft);
+  }, [open, player]);
+
+  const keys = React.useMemo(() => getRawKeys(raw), [raw]);
+
+  const onChangeField = (key: string, value: string) => {
+    const k = canonicalRawKey(key);
+
+    setDraft((s) => ({ ...s, [k]: value }));
+    setRaw((prev) => {
+      const prevCanon = buildCanonicalRaw(prev);
+      return {
+        ...prevCanon,
+        [k]: parseCell(prevCanon?.[k], value),
+      };
     });
-  }, [player]);
+  };
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!player) return;
 
-    await update.mutateAsync({
-      playerId: player.id,
-      payload: {
-        name: form.name,
-        team: form.team || null,
-        position: form.position || null,
-        hits: form.hits ?? null,
-        home_runs: form.home_runs ?? null,
-      },
-    });
+    // ✅ send canonical raw only (no home_run key can ever be created)
+    const payload: UpdatePlayerRequest = { raw } as any;
+
+    await update.mutateAsync({ playerId: player.id, payload });
 
     onOpenChange(false);
   };
@@ -58,80 +139,59 @@ export function EditPlayerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[640px]">
+      <DialogContent className="sm:max-w-[900px]">
         <DialogHeader>
-          <DialogTitle>Edit Player</DialogTitle>
+          <DialogTitle>Edit Player Stats (Raw)</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={onSubmit} className="space-y-4">
-          <div className="grid gap-3">
-            <label className="grid gap-1 text-sm">
-              <span className="text-muted-foreground">Name</span>
-              <input
-                className="h-10 rounded-md border px-3"
-                value={form.name}
-                onChange={(e) => setForm((s) => ({ ...s, name: e.target.value }))}
-                required
-              />
-            </label>
+          <p className="text-sm text-muted-foreground">Editing raw upstream fields only.</p>
 
-            <div className="grid grid-cols-2 gap-3">
-              <label className="grid gap-1 text-sm">
-                <span className="text-muted-foreground">Team</span>
-                <input
-                  className="h-10 rounded-md border px-3"
-                  value={form.team ?? ""}
-                  onChange={(e) => setForm((s) => ({ ...s, team: e.target.value }))}
-                />
-              </label>
+          <div className="max-h-[60vh] overflow-auto rounded-md border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 sticky top-0">
+                <tr className="text-left">
+                  <th className="px-3 py-2 w-[280px]">Field</th>
+                  <th className="px-3 py-2">Value</th>
+                </tr>
+              </thead>
 
-              <label className="grid gap-1 text-sm">
-                <span className="text-muted-foreground">Position</span>
-                <input
-                  className="h-10 rounded-md border px-3"
-                  value={form.position ?? ""}
-                  onChange={(e) => setForm((s) => ({ ...s, position: e.target.value }))}
-                />
-              </label>
-            </div>
+              <tbody>
+                {keys.length === 0 ? (
+                  <tr>
+                    <td className="px-3 py-3 text-muted-foreground" colSpan={2}>
+                      No raw fields found.
+                    </td>
+                  </tr>
+                ) : (
+                  keys.map((k) => (
+                    <tr key={k} className="border-t">
+                      <td className="px-3 py-2 align-top">
+                        <div className="font-medium whitespace-nowrap">{k}</div>
+                        <div className="text-xs text-muted-foreground">
+                          type:{" "}
+                          {raw?.[k] === null
+                            ? "null"
+                            : Array.isArray(raw?.[k])
+                            ? "array"
+                            : typeof raw?.[k]}
+                        </div>
+                      </td>
 
-            <div className="grid grid-cols-2 gap-3">
-              <label className="grid gap-1 text-sm">
-                <span className="text-muted-foreground">Hits</span>
-                <input
-                  className="h-10 rounded-md border px-3"
-                  type="number"
-                  value={form.hits ?? ""}
-                  onChange={(e) =>
-                    setForm((s) => ({
-                      ...s,
-                      hits: e.target.value === "" ? null : Number(e.target.value),
-                    }))
-                  }
-                />
-              </label>
-
-              <label className="grid gap-1 text-sm">
-                <span className="text-muted-foreground">Home Runs</span>
-                <input
-                  className="h-10 rounded-md border px-3"
-                  type="number"
-                  value={form.home_runs ?? ""}
-                  onChange={(e) =>
-                    setForm((s) => ({
-                      ...s,
-                      home_runs: e.target.value === "" ? null : Number(e.target.value),
-                    }))
-                  }
-                />
-              </label>
-            </div>
-
-            {update.isError ? (
-              <p className="text-sm text-red-600">
-                Failed to save changes.
-              </p>
-            ) : null}
+                      <td className="px-3 py-2">
+                        <input
+                          className="h-10 w-full rounded-md border px-3"
+                          value={draft[k] ?? ""}
+                          onChange={(e) => onChangeField(k, e.target.value)}
+                          disabled={disabled}
+                          placeholder="Enter value (number/text/true/false or JSON)"
+                        />
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
 
           <DialogFooter>

@@ -14,6 +14,7 @@ app = FastAPI(
 # Dev-only table create. Use Alembic later for prod.
 Base.metadata.create_all(bind=engine)
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],

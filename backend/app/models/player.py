@@ -1,4 +1,6 @@
-﻿from sqlalchemy import Column, Integer, String, Text, JSON
+﻿# backend/app/models/player.py
+from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy import Column, Integer, String, Text, JSON
 from app.db.session import Base
 
 class Player(Base):
@@ -16,4 +18,4 @@ class Player(Base):
 
     description = Column(Text, nullable=True)
 
-    raw = Column(JSON, nullable=False)
+    raw = Column(MutableDict.as_mutable(JSON), nullable=False)

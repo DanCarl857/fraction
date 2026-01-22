@@ -1,21 +1,40 @@
-﻿import hashlib
+﻿# backend/app/services/upstream.py  ✅ DROP-IN REPLACE FILE CONTENT (or replace sync_players + helpers)
+from typing import Any
+import hashlib
 import httpx
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy import func, or_
-from app.core.config import settings
-from app.models.player import Player
+from sqlalchemy import select
 
-def _get(obj, *keys, default=None):
-    cur = obj
-    for k in keys:
-        if not isinstance(cur, dict) or k not in cur:
-            return default
-        cur = cur[k]
-    return cur
+from app.models import Player
+from app.core.config import settings
+
+
+# --- Canonicalization: prevent "home_run" ever being introduced into raw ---
+_RAW_KEY_ALIASES: dict[str, str] = {
+    "home_run": "home run",
+    "homeRun": "home run",
+    "homeRuns": "home run",
+    "HomeRun": "home run",
+    "HomeRuns": "home run",
+
+    "hits": "Hits",
+    "HITS": "Hits",
+
+    "at_bat": "At-bat",
+    "atBat": "At-bat",
+    "AtBat": "At-bat",
+    "atbat": "At-bat",
+}
+
+def _canonicalize_raw(p: dict) -> dict:
+    out: dict = {}
+    for k, v in (p or {}).items():
+        out[_RAW_KEY_ALIASES.get(k, k)] = v
+    return out
+
 
 def _get_player_name(p: dict) -> str:
-    # your raw shows "Player name"
     return (
         p.get("name")
         or p.get("playerName")
@@ -24,14 +43,13 @@ def _get_player_name(p: dict) -> str:
         or "Unknown"
     )
 
+
 def _infer_external_id(p: dict) -> str:
-    # Prefer any real upstream ID fields first
     for k in ("external_id", "externalId", "id", "player_id", "playerId", "uuid"):
         v = p.get(k)
         if v:
             return str(v)
 
-    # Deterministic fallback: hash of stable identifying info
     name = _get_player_name(p)
     position = p.get("position") or p.get("Position") or ""
     team = p.get("team") or p.get("Team") or ""
@@ -40,24 +58,41 @@ def _infer_external_id(p: dict) -> str:
     digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
     return f"derived:{digest}"
 
-def _extract_stats(p: dict):
-    hits = p.get("hits")
-    hr = p.get("hr") or p.get("homeRuns") or p.get("home_runs")
 
-    if hits is None:
-        hits = _get(p, "stats", "hits") or _get(p, "batting", "hits")
-    if hr is None:
-        hr = _get(p, "stats", "hr") or _get(p, "stats", "home_runs") or _get(p, "batting", "homeRuns")
-
-    def to_int(x):
-        try:
-            return int(x)
-        except Exception:
+def _to_int(v: Any) -> int | None:
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    if isinstance(v, str):
+        s = v.strip().replace(",", "")
+        if s == "" or s == "--":
             return None
+        try:
+            return int(float(s))
+        except ValueError:
+            return None
+    return None
 
-    return to_int(hits), to_int(hr)
 
-from sqlalchemy.dialects.postgresql import insert
+def _extract_stats(p: dict) -> tuple[int | None, int | None]:
+    hits = p.get("Hits") if p.get("Hits") is not None else p.get("hits")
+
+    hr = None
+    for k in ("home run", "home runs", "Home Runs", "HR", "hr", "home_run", "homeRuns"):
+        if k in p and p.get(k) is not None:
+            hr = p.get(k)
+            break
+
+    return _to_int(hits), _to_int(hr)
+
+
+def _raw_changed(existing_raw: Any, next_raw: dict) -> bool:
+    # existing_raw is JSON in DB; usually a dict. Treat non-dict as changed.
+    if not isinstance(existing_raw, dict):
+        return True
+    return existing_raw != next_raw
+
 
 def sync_players(db: Session) -> dict:
     r = httpx.get(settings.BASEBALL_UPSTREAM_URL, timeout=30.0)
@@ -68,14 +103,17 @@ def sync_players(db: Session) -> dict:
     if not isinstance(players, list):
         raise ValueError("Unexpected upstream shape: expected list of players")
 
-    rows: list[dict] = []
+    # build incoming rows (canonical raw)
+    incoming: list[dict] = []
     for p in players:
         if not isinstance(p, dict):
             continue
 
+        p = _canonicalize_raw(p)  # ✅ critical: prevents home_run key from ever entering raw
+
         hits, home_runs = _extract_stats(p)
 
-        rows.append(
+        incoming.append(
             {
                 "external_id": _infer_external_id(p),
                 "name": _get_player_name(p),
@@ -87,17 +125,49 @@ def sync_players(db: Session) -> dict:
             }
         )
 
-    # de-dupe inside the batch by external_id (prevents ON CONFLICT errors)
+    # de-dupe inside the batch by external_id
     deduped: dict[str, dict] = {}
-    for row in rows:
+    for row in incoming:
         deduped[row["external_id"]] = row
     rows = list(deduped.values())
 
-    stmt = insert(Player).values(rows)
+    # ✅ Only update records whose raw actually changed; ignore unchanged.
+    ext_ids = [row["external_id"] for row in rows]
+    existing = db.execute(
+        select(Player.external_id, Player.raw).where(Player.external_id.in_(ext_ids))
+    ).all()
+    existing_map = {eid: raw for (eid, raw) in existing}
+
+    changed_rows: list[dict] = []
+    for row in rows:
+        prev_raw = existing_map.get(row["external_id"])
+        if prev_raw is None:
+            changed_rows.append(row)  # new insert
+        else:
+            if _raw_changed(prev_raw, row["raw"]):
+                changed_rows.append(row)  # update
+            # else: unchanged => ignore
+
+    if not changed_rows:
+        return {
+            "received": len(players),
+            "unique": len(rows),
+            "affected": 0,
+            "deduped_out": len(players) - len(rows),
+        }
+
+    stmt = insert(Player).values(changed_rows)
 
     stmt = stmt.on_conflict_do_update(
         index_elements=[Player.external_id],
-        set_={"raw": stmt.excluded.raw},
+        set_={
+            "raw": stmt.excluded.raw,
+            "hits": stmt.excluded.hits,
+            "home_runs": stmt.excluded.home_runs,
+            "name": stmt.excluded.name,
+            "team": stmt.excluded.team,
+            "position": stmt.excluded.position,
+        },
     )
 
     result = db.execute(stmt)
@@ -106,7 +176,6 @@ def sync_players(db: Session) -> dict:
     return {
         "received": len(players),
         "unique": len(rows),
-        "affected": result.rowcount,
+        "affected": result.rowcount,        # number of inserts + updates actually applied
         "deduped_out": len(players) - len(rows),
     }
-
