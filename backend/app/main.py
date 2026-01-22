@@ -3,7 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
 from app.db.session import Base, engine
 
-app = FastAPI(title="Baseball API", version="0.1.0")
+app = FastAPI(
+    title="Baseball API",
+    version="0.1.0",
+    docs_url="/api/docs",
+    openapi_url="/api/openapi.json",
+)
+
 
 # Dev-only table create. Use Alembic later for prod.
 Base.metadata.create_all(bind=engine)

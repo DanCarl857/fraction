@@ -1,35 +1,124 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import * as React from "react";
+import { type PlayersSort, useGetPlayers } from "./api/hooks";
+import type { Player } from "./api/schema";
+import { EditPlayerDialog } from "./components/EditDialog";
+import { PlayerDescriptionDialog } from "./components/PlayerDescriptionDialog";
 
-function App() {
-  const [count, setCount] = useState(0)
+export default function App() {
+  const [sort, setSort] = React.useState<PlayersSort>("hits");
+  const { data, isLoading, isError } = useGetPlayers(sort);
+
+  const [selected, setSelected] = React.useState<Player | null>(null);
+
+  const [descOpen, setDescOpen] = React.useState(false);
+  const [editOpen, setEditOpen] = React.useState(false);
+
+  const players = data ?? [];
+
+  const openDescription = (p: Player) => {
+    setSelected(p);
+    setDescOpen(true);
+  };
+
+  const openEdit = (p: Player, e: React.MouseEvent) => {
+    e.stopPropagation(); // don’t open description on edit click
+    setSelected(p);
+    setEditOpen(true);
+  };
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+    <div className="p-6 space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-xl font-semibold">Players</h1>
+
+        <div className="flex items-center gap-2">
+          <button
+            className={`h-9 rounded-md border px-3 text-sm ${sort === "hits" ? "bg-muted" : ""}`}
+            onClick={() => setSort("hits")}
+          >
+            Sort: Hits
+          </button>
+          <button
+            className={`h-9 rounded-md border px-3 text-sm ${sort === "hr" ? "bg-muted" : ""}`}
+            onClick={() => setSort("hr")}
+          >
+            Sort: HRs
+          </button>
+        </div>
       </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
+
+      <div className="rounded-md border overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/50">
+            <tr className="text-left">
+              <th className="px-3 py-2">Name</th>
+              <th className="px-3 py-2">Team</th>
+              <th className="px-3 py-2">Pos</th>
+              <th className="px-3 py-2">Hits</th>
+              <th className="px-3 py-2">HRs</th>
+              <th className="px-3 py-2 w-[1%]"></th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {isLoading ? (
+              <tr>
+                <td className="px-3 py-3 text-muted-foreground" colSpan={6}>
+                  Loading players…
+                </td>
+              </tr>
+            ) : isError ? (
+              <tr>
+                <td className="px-3 py-3 text-red-600" colSpan={6}>
+                  Failed to load players.
+                </td>
+              </tr>
+            ) : players.length === 0 ? (
+              <tr>
+                <td className="px-3 py-3 text-muted-foreground" colSpan={6}>
+                  No players found.
+                </td>
+              </tr>
+            ) : (
+              players.map((p) => (
+                <tr
+                  key={p.id}
+                  className="cursor-pointer hover:bg-muted/40"
+                  onClick={() => openDescription(p)}
+                >
+                  <td className="px-3 py-2 font-medium">{p.name}</td>
+                  <td className="px-3 py-2">{p.team ?? "—"}</td>
+                  <td className="px-3 py-2">{p.position ?? "—"}</td>
+                  <td className="px-3 py-2">{p.hits ?? "—"}</td>
+                  <td className="px-3 py-2">{p.home_runs ?? "—"}</td>
+                  <td className="px-3 py-2 text-right">
+                    <button
+                      className="h-8 rounded-md border px-3 text-xs"
+                      onClick={(e) => openEdit(p, e)}
+                    >
+                      Edit
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+
+      <PlayerDescriptionDialog
+        open={descOpen}
+        onOpenChange={setDescOpen}
+        playerId={selected?.id ?? null}
+        playerName={selected?.name ?? null}
+      />
+
+      <EditPlayerDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        player={selected}
+      />
+    </div>
+  );
 }
 
-export default App
