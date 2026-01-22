@@ -42,7 +42,7 @@ def update_player(player_id: int, payload: PlayerUpdate, db: Session = Depends(g
     db.refresh(p)
     return p
 
-@router.post("/players/{player_id}/description", response_model=PlayerOut)
+@router.get("/players/{player_id}/description", response_model=PlayerOut)
 def ensure_description(player_id: int, db: Session = Depends(get_db)):
     p = db.query(Player).filter(Player.id == player_id).one_or_none()
     if not p:

@@ -8,12 +8,12 @@ def generate_description(db: Session, player_id: int) -> Player:
     if player.description:
         return player
 
-    if not settings.OPENAI_API_KEY:
-        player.description = "No LLM key configured. Set OPENAI_API_KEY to generate descriptions."
+    if not settings.AI_KEY:
+        player.description = "No LLM key configured. Set AI_KEY to generate descriptions."
         db.commit()
         return player
 
-    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+    client = OpenAI(api_key=settings.AI_KEY)
 
     prompt = f"""
 Write a short scouting-style description (2-4 sentences) of this baseball player based ONLY on the provided JSON.

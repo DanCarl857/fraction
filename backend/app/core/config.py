@@ -13,7 +13,7 @@ ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 class Settings(BaseSettings):
     DB_URL: str
-    OPENAI_API_KEY: str | None = None
+    AI_KEY: str
     BASEBALL_UPSTREAM_URL: str = "https://api.hirefraction.com/api/test/baseball"
 
     app_name: str = Field(default="fraction-backend")
